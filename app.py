@@ -38,7 +38,7 @@ DB_PASSWORD = os.getenv("DB_PASSWORD")
 HUGGINGFACE_KEY = os.getenv("HUGGINGFACE_KEY")
 driver = GraphDatabase.driver(DB_URI, auth=(DB_USER, DB_PASSWORD))
 # huggingface API
-login(token="HUGGINGFACE_KEY",add_to_git_credential=True)
+login(token=HUGGINGFACE_KEY,add_to_git_credential=True)
 # OpenAI API key
 os.environ['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY")
 

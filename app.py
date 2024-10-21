@@ -3,14 +3,28 @@ from neo4j import GraphDatabase
 from dotenv import load_dotenv
 import os
 import json
-import networkx as nx
-import asyncio
 import nest_asyncio
+from langchain_openai import ChatOpenAI
+import hashlib
+import networkx as nx
+import matplotlib.pyplot as plt
+from langchain_openai import OpenAI
 from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.schema import StrOutputParser
 from langchain.schema.runnable import RunnablePassthrough
-import hashlib
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline,AutoConfig
+import torch
+from huggingface_hub import login
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import sys
+import numpy as np
+import time
+import random
+import re
+from typing import Callable, Any, List, Dict, Tuple
+from accelerate import Accelerator
 
 app = Flask(__name__)
 
@@ -21,8 +35,10 @@ load_dotenv()
 DB_URI = os.getenv("DB_URI")
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
+HUGGINGFACE_KEY = os.getenv("HUGGINGFACE_KEY")
 driver = GraphDatabase.driver(DB_URI, auth=(DB_USER, DB_PASSWORD))
-
+# huggingface API
+login(token="HUGGINGFACE_KEY",add_to_git_credential=True)
 # OpenAI API key
 os.environ['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY")
 
@@ -182,31 +198,124 @@ graph_cache = GraphCache()
 graph_manager = GraphManager()
 
 # Helper functions (implement these)
-import json
-import networkx as nx
-from typing import List, Dict, Tuple
-import matplotlib.pyplot as plt
-from langchain_openai import OpenAI
-from langchain_openai import ChatOpenAI
-from langchain.prompts import PromptTemplate
-from langchain.schema import StrOutputParser
-from langchain.schema.runnable import RunnablePassthrough
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline,AutoConfig
-import torch
-from huggingface_hub import login
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
-import sys
-import numpy as np
-import time
-import random
-import re
-import nest_asyncio
-from typing import Callable, Any
-from accelerate import Accelerator
+
+# Current function library
+def clean_embedding(embedding_list):
+    # Remove the '[' and ']' from the first and last elements respectively
+    embedding_list[0] = embedding_list[0].replace('[', '')
+    embedding_list[-1] = embedding_list[-1].replace(']', '')
+    return np.array([float(x) for x in embedding_list])
 
 
-login(token="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",add_to_git_credential=True)
+def fetch_start_node_details(protein_name):
+    query = """
+MATCH (p:Protein)
+WHERE p.name < $name
+WITH COUNT(p) AS stepsToSkip
+MATCH (specificProtein:Protein {name: $name})
+RETURN specificProtein AS protein, stepsToSkip
+
+    """
+    with driver.session() as session:
+        result = session.run(query, name=protein_name)
+        for record in result:
+            protein_details = record['protein']
+            id = record['stepsToSkip']
+
+            cleaned_embedding = clean_embedding(protein_details['embedding'])
+    return protein_details, cleaned_embedding, id
+
+def fetch_interacting_proteins(driver, protein_name):
+    query = """
+    MATCH (p:Protein {name: $name})
+    MATCH (interactor:Protein)-[r:INTERACTS_FULL|INTERACTS_PHY]->(p)
+    RETURN interactor.id AS id, interactor.name AS name, interactor.embedding AS embedding,
+           interactor.annotation AS annotation, TYPE(r) AS relationshipType, r AS properties
+    """
+    with driver.session() as session:
+        result = session.run(query, name=protein_name)
+        return [{
+                 "name": record["name"],
+                 "embedding": clean_embedding(record["embedding"]),
+                 "score": record["properties"].get('score', 'No score available'),
+                 "relationshipType": record["relationshipType"]}
+                for record in result]
+
+
+
+def embedding_search_on_filtered(query_embedding, interacting_proteins, k, n_fold):
+    embeddings = [protein["embedding"] for protein in interacting_proteins]
+
+    # Calculate the total number of proteins to retrieve
+    total_k = k * n_fold
+
+    # Ensure we don't try to retrieve more proteins than available
+    total_k = min(total_k, len(interacting_proteins))
+
+    index = hnswlib.Index(space='l2', dim=DIMENSION)
+    index.init_index(max_elements=len(embeddings), ef_construction=200, M=16)
+    index.add_items(embeddings, list(range(len(embeddings))))
+
+    # Retrieve total_k nearest neighbors
+    labels, distances = index.knn_query(query_embedding, k=total_k)
+
+    # Reshape labels and distances to 1D arrays
+    labels = labels.flatten()
+    distances = distances.flatten()
+
+    # Create a list of (protein, distance) tuples
+    protein_distance_pairs = [(interacting_proteins[label], distance) for label, distance in zip(labels, distances)]
+
+    # Sort the pairs by distance
+    protein_distance_pairs.sort(key=lambda x: x[1])
+
+    # Separate the sorted proteins and distances
+    sorted_proteins = [pair[0] for pair in protein_distance_pairs]
+    sorted_distances = [pair[1] for pair in protein_distance_pairs]
+
+    return sorted_proteins, sorted_distances
+
+def get_proteins_for_fold(sorted_proteins, sorted_distances, k, n_fold):
+    start_index = (n_fold - 1) * k
+    end_index = min(n_fold * k, len(sorted_proteins))
+    return sorted_proteins[start_index:end_index], sorted_distances[start_index:end_index]
+
+def fetch_relationships_between_nodes(driver, start_node, recommended_nodes):
+    recommended_node_names = [node['name'] for node in recommended_nodes]
+    print("Recommended Node Names:", recommended_node_names)
+    print("Start Node ID:", start_node['name'])
+    query = """
+    MATCH (start:Protein {name: $startName})
+    MATCH (recommended:Protein) WHERE recommended.name IN $recommendedNodeNames
+    OPTIONAL MATCH (start)-[r:INTERACTS_FULL | INTERACTS_PHY]->(recommended)
+    RETURN start, recommended, TYPE(r) AS relationshipType, r AS properties
+    """
+    with driver.session() as session:
+        result = session.run(query, startName=start_node['name'], recommendedNodeNames=recommended_node_names)
+        relationships = []
+        for record in result:
+            start_node_name = record['start']['name']
+            recommended_node_name = record['recommended']['name']
+            recommended_node_annotation = record['recommended'].get('annotation', 'No annotation available')
+
+            if record['properties']:  # If there are properties, it means there is a relationship
+                relationships.append({
+                    'start': start_node_name,
+                    'end': recommended_node_name,
+                    'type': record['relationshipType'],
+                    'properties': {
+                        'score': record['properties'].get('score', 'No score available'),
+                        'annotation': recommended_node_annotation
+
+                    }
+                })
+            else:
+                print(f"No relationships found between {start_node_name} and {recommended_node_name}.")
+    return relationships
+
+
+
+
 
 ## Data Loading and Graph Construction
 
@@ -551,81 +660,7 @@ def run_recommendation(G: nx.Graph, query: str, start_protein: str, max_length: 
 
 
 
-## Visualization Function
 
-def get_color_map(num_depths):
-    """Generate a color map for different depths."""
-    return plt.cm.Blues(np.linspace(0.3, 1, num_depths))
-
-def visualize_network(proteins, relationships, start_protein):
-    nx_graph = nx.MultiDiGraph()
-
-    interaction_colors = {
-        'INTERACTS_FULL': 'orange',
-        'INTERACTS_PHY': 'green'
-    }
-
-    # Create a dictionary to store the minimum depth for each protein
-    protein_depths = {}
-    for protein in proteins:
-        name = protein['name']
-        depth = protein.get('depth', 0)
-        if name not in protein_depths or depth < protein_depths[name]:
-            protein_depths[name] = depth
-
-    # Add nodes
-    for protein in proteins:
-        name = protein['name']
-        depth = protein_depths[name]
-        nx_graph.add_node(name, depth=depth)
-
-    # Add edges
-    for rel in relationships:
-        start_name = rel['start']
-        end_name = rel['end']
-        interaction_type = rel['type']
-        score = rel['properties'].get('score', 0)
-        annotation = rel['properties'].get('annotation', 'No annotation available')
-
-        edge_color = interaction_colors.get(interaction_type, 'gray')
-        nx_graph.add_edge(start_name, end_name, weight=score/100, label=interaction_type, color=edge_color, annotation=annotation)
-
-    # Determine the number of unique depths
-    depths = sorted(set(nx_graph.nodes[node]['depth'] for node in nx_graph.nodes))
-    num_depths = len(depths)
-    color_map = get_color_map(num_depths)
-
-    # Assign colors based on depth
-    node_colors = []
-    for node in nx_graph.nodes:
-        if node == start_protein:
-            node_colors.append('red')
-        else:
-            depth = nx_graph.nodes[node]['depth']
-            color_index = depths.index(depth)
-            node_colors.append(color_map[color_index])
-
-    # Drawing the graph
-    pos = nx.spring_layout(nx_graph, seed=42)  # Fixed seed for consistent layout
-    edge_colors = [nx_graph.edges[edge]['color'] for edge in nx_graph.edges]
-
-    plt.figure(figsize=(12, 8))
-    nx.draw(nx_graph, pos, node_color=node_colors, edge_color=edge_colors, with_labels=True, node_size=700)
-
-    # Add edge labels
-    edge_labels = nx.get_edge_attributes(nx_graph, 'label')
-    nx.draw_networkx_edge_labels(nx_graph, pos, edge_labels=edge_labels)
-
-    # Add a color bar to show depth
-    sm = plt.cm.ScalarMappable(cmap=plt.cm.Blues, norm=plt.Normalize(vmin=min(depths), vmax=max(depths)))
-    sm.set_array([])
-    cbar = plt.colorbar(sm)
-    cbar.set_label('Depth')
-
-    plt.title(f"Recommended Protein Interaction Network (Starting from {start_protein})")
-    plt.axis('off')
-    plt.tight_layout()
-    plt.show()
 
 
 

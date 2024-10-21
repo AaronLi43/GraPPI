@@ -167,12 +167,35 @@ curl -X POST http://localhost:5000/recommend_paths \
 # 3. List all available graphs
 curl http://localhost:5000/list_graphs
 ```
+## Credentials Setup
+This application requires two types of credentials:
+### Pre-configured Database Access
+The Neo4j database credentials are pre-configured and managed by the application. You don't need to set these up.
+### Required API Keys
+You need to provide your own API keys for:
+1. HuggingFace API: Get your API key from HuggingFace (Can be omitted if using ChatGPT series models)
+2. OpenAI API: Get your API key from OpenAI Platform (Can be omitted if using other open-source models)
+
+## Setting Up Your Credentials
+1. Copy the example environment file:
+```
+cp .env.example .env
+```
+2. Update the `.env` file with your API keys:
+
+```
+HUGGINGFACE_KEY=your_huggingface_key_here
+OPENAI_API_KEY=your_openai_key_here
+```
 
 ## Important note
 1. Before running path recommendations, you must first analyze the graph using the `/analyze_graph` endpoint.
 2. The API uses caching to improve performance for repeated queries.
 3. Queries should be specific and clearly state the desired protein interactions.
 4. The `n_fold` parameter in `analyze_graph` affects the diversity of the returned results.
+5. Never commit your `.env` file to version control.
+6. Keep your API keys secure and never share them
+7. The Neo4j database credentials are managed by the application and should not be modified
 
 ## License
 

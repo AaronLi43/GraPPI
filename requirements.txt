@@ -1,0 +1,6 @@
+flask
+python-dotenv
+neo4j
+networkx
+langchain
+openai

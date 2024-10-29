@@ -53,8 +53,11 @@ edge_relevance_prompt = PromptTemplate(
         You should follow those steps for analysis:
     <Steps>
     1. Use the name of proteins along the path to figure out the directional graph. Consider the direction of the interaction and always and only consider the impact of the direct last protein.
+    The effect propogates backward to the start protein.
     2. The previous protein should be able to directly interact with the current protein according to the information provided. If not, the interaction is not relevant.
     3. Explan potential biological processes or mechanisms before recommending it. If you can not find any explict reasons and just say they are relevant. The path will be deleted.
+    4. The proteins on the ends of one edge must be able to directly interact with each other. If not, the edge does not make any sense and the relevance is zero.
+    5. The effect propogates from end protein to start protein.
     </Steps>
 
     Protein information:
@@ -76,20 +79,15 @@ path_explanation_prompt = PromptTemplate(
     You should follow those steps for analysis:
     <Steps>
     1. Use the name of proteins along the path to figure out the directional graph. Protein A -> Protein B -> Protein C means that protein c can influence protein b and protein b can influence protein a.
+    Any other direction is not relevant.
     2. The path should satisfy the requirements in the query. The more likely the requirements get satisfied, the higher the relevance score is.
     3. The previous protein should be able to directly interact with the current protein according to the information provided. If not, the interaction is not relevant.
-    4. Explan potential biological processes or mechanisms before recommending it. If you can not find any explict reasons and just say they are relevant. The path will be deleted.
+    4. Explain potential biological processes or mechanisms before recommending it. If you can not find any explict reasons and just say they are relevant. The path will be deleted.
     5. Provide a relevance score from 0 to 100, where 0 is not relevant at all and 100 is highly relevant This score will be used to rank the paths according to their relevance of the explanation to the query.
-    </Steps>
-    Some examples of paths:
-    <Path>### Edge 3: MARK2 -> STK11
-
-- **Explanation**: The interaction is relevant because STK11 phosphorylates MARK4, influencing its activity.</Path>,<Decision>we do not want it since the direction of influence is wrong</Decision>
-    <Path>Edge 1: MARK4 -> MARK3
-    Explanation: The interaction between MARK4 and MARK3 is relevant.</Path>,<Decision>we do not want it because it does tell the explict reasons</Decision>
-    <Path>Edge 2: MARK3 -> MARK2
-    Explanation: This interaction is relevant because both MARK3 and MARK2 are serine/threonine kinases involved in microtubule dynamics.</Path>,<Decision>we do not want it because MARK4 and MARK3 do not have direct interaction :Find proteins that inhibit or activate MARK4</Decision>
-
+    6. The proteins on the ends of one edge must be able to directly interact with each other. If not, the path does not make any sense and the relevance is zero. 
+    7. The effect propogates from end protein to start protein.
+</Steps>
+   
     Path: {path}
 
     Details of each step:

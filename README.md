@@ -1,6 +1,6 @@
 # GraPPI
 
-This Flask-based API provides functionality for analyzing protein interactions and recommending protein paths based on user queries.
+This Flask-based API provides functionality for analyzing protein interactions and recommending protein paths based on user queries. (since constantly running the large-scale database would be extremely expensive (~3$/hour), once you want to reproduce the results or just explore PPI, please feel free to make your appointment in the issue. We will resume the database in the appointed time period.)
 
 ## Features
 
@@ -167,10 +167,12 @@ curl -X POST http://localhost:5000/recommend_paths \
 # 3. List all available graphs
 curl http://localhost:5000/list_graphs
 ```
+
+If app.py fails, you can use Pipeline.ipynb as a backup. You can walk through the Jupyter Notebook to obtain your PPI recommendation results.
 ## Credentials Setup
 This application requires two types of credentials:
 ### Pre-configured Database Access
-The Neo4j database credentials are pre-configured and managed by the application. You don't need to set these up.
+The Neo4j database credentials are pre-configured and managed by the application. You don't need to set these up. However, since constantly running the large-scale database would be extremely expensive (~3$/hour), once you want to reproduce the results or just explore PPI, please feel free to make your appointment in the issue. We will resume the database in the appointed time period.
 ### Required API Keys
 You need to provide your own API keys for:
 1. HuggingFace API: Get your API key from HuggingFace (Can be omitted if using ChatGPT series models)
